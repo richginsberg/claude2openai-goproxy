@@ -14,6 +14,8 @@ A high-performance Go proxy that translates the [Anthropic Messages API](https:/
 - **Guarded tool call parsing** — Ignores empty `id`/`name` in trailing vLLM chunks to prevent overwriting valid values
 - **Client timeout** — 120-second timeout on all vLLM requests to prevent indefinite hangs
 - **Threaded request handling** — Each connection is handled in its own goroutine
+- **OpenTelemetry** — Traces and metrics exported via OTLP gRPC; supports end-to-end tracing with `traceparent` propagation through to vLLM
+- **OpenTelemetry observability** — Traces and metrics exported via OTLP (spans: `proxy.request`, `proxy.translate.request`, `proxy.forward.vllm`, `proxy.stream`; metrics: duration, count, tokens, chunks)
 
 ## Architecture
 
@@ -54,6 +56,7 @@ go build -o golangproxy main.go
 | `VLLM_MODEL` | `Lorbus/Qwen3.6-27B-int4-AutoRound` | Model ID to use in requests to vLLM |
 | `PROXY_PORT` | `4000` | Port the proxy listens on |
 | `PROXY_HOST` | `0.0.0.0` | Host the proxy binds to |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP gRPC endpoint for traces/metrics |
 
 ### Running Manually
 
@@ -138,10 +141,57 @@ The proxy presents a compatible `/v1/messages` endpoint and `/v1/models` listing
 ## Building
 
 ```bash
+# Fetch dependencies, then build
+go mod tidy
 go build -o golangproxy main.go
 
 # Cross-compile for Linux amd64
 GOOS=linux GOARCH=amd64 go build -o golangproxy
+```
+
+## Observability (OpenTelemetry)
+
+The proxy exports traces and metrics via OTLP gRPC to a local OpenTelemetry Collector on port `4317` by default.
+
+### Traces
+
+| Span | Description |
+|---|---|
+| `proxy.request` | Root span for the full request lifecycle |
+| `proxy.translate.request` | Anthropic → OpenAI format translation |
+| `proxy.forward.vllm` | Outbound request to vLLM (propagates `traceparent`) |
+| `proxy.stream` | Streaming response processing (attributes: `llm.output.tokens`, `proxy.stream.chunks`) |
+| `proxy.collect` | Non-streaming response processing (attributes: `llm.output.tokens`) |
+
+End-to-end traces are supported: if Claude Code (or any client) sends a `traceparent` header, it is extracted and used as the parent context. The trace context is also propagated into the outbound vLLM request.
+
+### Metrics
+
+| Metric | Type | Attributes |
+|---|---|---|
+| `proxy.request.duration` | Histogram (ms) | `llm.request.model`, `llm.request.stream`, `proxy.request.status` |
+| `proxy.request.count` | Counter | `llm.request.model`, `llm.request.stream`, `proxy.request.status` |
+| `proxy.request.tokens` | Counter | `llm.request.model`, `llm.io` (`input`/`output`) |
+| `proxy.stream.chunks` | Counter | recorded on span attributes |
+
+### Running the Collector
+
+```bash
+# Start the collector with ClickHouse exporter
+# Requires: otel/opentelemetry-collector-contrib (includes clickhouseexporter)
+docker run -d --name otel-collector \
+  -p 4317:4317 -p 4318:4318 \
+  -v $(pwd)/otelcol-config.yml:/etc/otelcol/config.yml \
+  otel/opentelemetry-collector-contrib:latest \
+  --config /etc/otelcol/config.yml
+```
+
+A sample collector config is included at `otelcol-config.yml`. It exports to stdout (for debugging) and ClickHouse (`localhost:8123`, database `otel`). Adjust the ClickHouse endpoint in the config for your setup.
+
+To disable OTel entirely (no collector available), start the proxy with an unreachable endpoint — the exporter retries briefly then drops data silently:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=127.0.0.1:1 ./golangproxy  # falls back gracefully
 ```
 
 ## License

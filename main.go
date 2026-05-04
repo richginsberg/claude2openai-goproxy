@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,11 +15,17 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 var (
 	vllmURL   = os.Getenv("VLLM_URL")
 	vllmModel = os.Getenv("VLLM_MODEL")
+	proxyUser = os.Getenv("PROXY_USER")
 )
 
 func init() {
@@ -27,6 +34,9 @@ func init() {
 	}
 	if vllmModel == "" {
 		vllmModel = "Lorbus/Qwen3.6-27B-int4-AutoRound"
+	}
+	if proxyUser == "" {
+		proxyUser = "anonymous"
 	}
 }
 
@@ -52,16 +62,21 @@ type AnthropicRequest struct {
 
 // ─── OpenAI types ─────────────────────────────────────────────────────────
 
+type OpenAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
 type OpenAIRequest struct {
-	Model       string          `json:"model"`
-	Messages    []OpenAIMessage `json:"messages"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Temperature *float64        `json:"temperature,omitempty"`
-	TopP        *float64        `json:"top_p,omitempty"`
-	TopK        *float64        `json:"top_k,omitempty"`
-	Stream      bool            `json:"stream,omitempty"`
-	Stop        []string        `json:"stop,omitempty"`
-	Tools       []OpenAITool    `json:"tools,omitempty"`
+	Model         string             `json:"model"`
+	Messages      []OpenAIMessage    `json:"messages"`
+	MaxTokens     int                `json:"max_tokens,omitempty"`
+	Temperature   *float64           `json:"temperature,omitempty"`
+	TopP          *float64           `json:"top_p,omitempty"`
+	TopK          *float64           `json:"top_k,omitempty"`
+	Stream        bool               `json:"stream,omitempty"`
+	StreamOptions *OpenAIStreamOptions `json:"stream_options,omitempty"`
+	Stop          []string           `json:"stop,omitempty"`
+	Tools         []OpenAITool       `json:"tools,omitempty"`
 }
 
 type OpenAIMessage struct {
@@ -73,7 +88,7 @@ type OpenAIMessage struct {
 }
 
 type OpenAITool struct {
-	Type     string       `json:"type"`
+	Type     string         `json:"type"`
 	Function OpenAIFuncSpec `json:"function"`
 }
 
@@ -84,8 +99,8 @@ type OpenAIFuncSpec struct {
 }
 
 type OpenAIToolCall struct {
-	ID       string        `json:"id"`
-	Type     string        `json:"type"`
+	ID       string         `json:"id"`
+	Type     string         `json:"type"`
 	Function OpenAIFuncCall `json:"function"`
 }
 
@@ -95,17 +110,17 @@ type OpenAIFuncCall struct {
 }
 
 type OpenAIResponse struct {
-	ID      string         `json:"id"`
-	Model   string         `json:"model"`
-	Choices []OpenAIChoice `json:"choices"`
-	Usage   *OpenAIUsage   `json:"usage,omitempty"`
+	ID      string          `json:"id"`
+	Model   string          `json:"model"`
+	Choices []OpenAIChoice  `json:"choices"`
+	Usage   *OpenAIUsage    `json:"usage,omitempty"`
 }
 
 type OpenAIChoice struct {
-	Index        int               `json:"index"`
-	Message      OpenAIMessage     `json:"message,omitempty"`
+	Index        int              `json:"index"`
+	Message      OpenAIMessage    `json:"message,omitempty"`
 	Delta        OpenAIMessageDelta `json:"delta,omitempty"`
-	FinishReason string            `json:"finish_reason,omitempty"`
+	FinishReason string           `json:"finish_reason,omitempty"`
 }
 
 type OpenAIMessageDelta struct {
@@ -298,7 +313,10 @@ func convertTools(raw []json.RawMessage) []OpenAITool {
 
 // ─── Translate Anthropic → OpenAI ─────────────────────────────────────────
 
-func anthropicToOpenAI(req *AnthropicRequest) *OpenAIRequest {
+func anthropicToOpenAI(ctx context.Context, req *AnthropicRequest) *OpenAIRequest {
+	_, span := otelTracer.Start(ctx, "proxy.translate.request")
+	defer span.End()
+
 	openai := &OpenAIRequest{
 		Model:       vllmModel,
 		MaxTokens:   req.MaxTokens,
@@ -358,6 +376,9 @@ func anthropicToOpenAI(req *AnthropicRequest) *OpenAIRequest {
 		}
 	}
 
+	// Always request usage data in final SSE chunk for input token count & timing
+	openai.StreamOptions = &OpenAIStreamOptions{IncludeUsage: true}
+
 	return openai
 }
 
@@ -410,10 +431,22 @@ var vllmClient = &http.Client{
 	},
 }
 
-func requestVLLM(body []byte) (*http.Response, error) {
+func requestVLLM(ctx context.Context, body []byte) (*http.Response, error) {
+	_, span := otelTracer.Start(ctx, "proxy.forward.vllm")
+	defer span.End()
+
 	req, err := http.NewRequest("POST", vllmURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
+		span.SetStatus(codes.Error, "create request failed")
 		return nil, fmt.Errorf("create request: %w", err)
+	}
+	// Inject trace context into outbound request headers
+	carrier := propagation.HeaderCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	for k, vs := range carrier {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer sk-local")
@@ -422,9 +455,11 @@ func requestVLLM(body []byte) (*http.Response, error) {
 
 	resp, err := vllmClient.Do(req)
 	if err != nil {
+		span.SetStatus(codes.Error, "request failed")
 		return nil, fmt.Errorf("request: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		span.SetStatus(codes.Error, fmt.Sprintf("vLLM returned %d", resp.StatusCode))
 		resp.Body.Close()
 		return nil, fmt.Errorf("vLLM returned %d: %s", resp.StatusCode, resp.Status)
 	}
@@ -433,8 +468,8 @@ func requestVLLM(body []byte) (*http.Response, error) {
 
 // ─── Collect (non-streaming mode) ─────────────────────────────────────────
 
-func collectVLLM(body []byte) (*OpenAIResponse, error) {
-	resp, err := requestVLLM(body)
+func collectVLLM(ctx context.Context, body []byte) (*OpenAIResponse, error) {
+	resp, err := requestVLLM(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -443,6 +478,7 @@ func collectVLLM(body []byte) (*OpenAIResponse, error) {
 	var text, reasoning, id, model = "", "", "", vllmModel
 	var toolCalls []OpenAIToolCall
 	tokens := 0
+	inputTokens := 0
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -461,6 +497,15 @@ func collectVLLM(body []byte) (*OpenAIResponse, error) {
 		if id == "" {
 			if v, ok := p["id"].(string); ok {
 				id = v
+			}
+		}
+		// Parse usage from final chunk (when stream_options.include_usage is set)
+		if usageRaw, ok := p["usage"].(map[string]interface{}); ok {
+			if pt, ok := usageRaw["prompt_tokens"].(float64); ok {
+				inputTokens = int(pt)
+			}
+			if ct, ok := usageRaw["completion_tokens"].(float64); ok {
+				tokens = int(ct) // Use vLLM's authoritative count
 			}
 		}
 		if model == vllmModel {
@@ -535,22 +580,39 @@ func collectVLLM(body []byte) (*OpenAIResponse, error) {
 	return &OpenAIResponse{
 		ID: id, Model: model,
 		Choices: []OpenAIChoice{{Index: 0, Message: OpenAIMessage{Role: "assistant", Content: text, ToolCalls: toolCalls}}},
-		Usage: &OpenAIUsage{CompletionTokens: tokens},
+		Usage: &OpenAIUsage{PromptTokens: inputTokens, CompletionTokens: tokens},
 	}, nil
 }
 
-func handleCollected(w http.ResponseWriter, body []byte) {
+func handleCollected(ctx context.Context, w http.ResponseWriter, body []byte) (int, int) {
+	_, span := otelTracer.Start(ctx, "proxy.collect")
+	defer span.End()
+
 	log.Println("[COLLECT] Starting")
-	resp, err := collectVLLM(body)
+	resp, err := collectVLLM(ctx, body)
 	if err != nil {
 		log.Printf("[COLLECT] Error: %v", err)
+		span.SetStatus(codes.Error, "vLLM error")
 		http.Error(w, fmt.Sprintf("vLLM: %v", err), http.StatusBadGateway)
-		return
+		return 0, 0
 	}
 	log.Println("[COLLECT] Done")
 	ar := openaiToAnthropicResp(resp)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ar)
+
+	outputTokens := 0
+	inputTokens := 0
+	if resp.Usage != nil {
+		outputTokens = resp.Usage.CompletionTokens
+		inputTokens = resp.Usage.PromptTokens
+	}
+	span.SetAttributes(
+		attribute.Int("llm.output.tokens", outputTokens),
+		attribute.Int("llm.input.tokens", inputTokens),
+		attribute.String("llm.response.model", resp.Model),
+	)
+	return outputTokens, inputTokens
 }
 
 // ─── Streaming state ──────────────────────────────────────────────────────
@@ -575,9 +637,13 @@ type streamState struct {
 	tcs            []tcState
 	msgID          string
 	inputTokens    int
+	// Timing for TPS (tokens per second) estimation
+	startTime     time.Time
+	firstTokenAt  time.Time
+	gotFirstToken bool
 }
 
-func newStreamState(msgID string, inputTokens int) *streamState {
+func newStreamState(msgID string, inputTokens int, startTime time.Time) *streamState {
 	return &streamState{
 		thinkingIdx: 0,
 		textIdx:     1,
@@ -585,6 +651,7 @@ func newStreamState(msgID string, inputTokens int) *streamState {
 		tcs:         make([]tcState, 0),
 		msgID:       msgID,
 		inputTokens: inputTokens,
+		startTime:   startTime,
 	}
 }
 
@@ -636,10 +703,37 @@ func finishStream(w sseWriter, s *streamState, totalTokens int, stopReason strin
 		})
 		sendEvent(w, map[string]interface{}{"type": "content_block_stop", "index": 0})
 	}
+
+	// Build usage with input + output tokens
+	usage := map[string]interface{}{
+		"input_tokens":  s.inputTokens,
+		"output_tokens": totalTokens,
+	}
+
+	// Calculate TPS for prefill (input) and decode (output)
+	if s.gotFirstToken && !s.firstTokenAt.IsZero() && !s.startTime.IsZero() {
+		prefillDuration := s.firstTokenAt.Sub(s.startTime).Seconds()
+		decodeDuration := time.Since(s.firstTokenAt).Seconds()
+		totalDuration := time.Since(s.startTime).Seconds()
+
+		if prefillDuration > 0 {
+			usage["prefill_tokens_per_second"] = float64(s.inputTokens) / prefillDuration
+		}
+		if decodeDuration > 0 {
+			usage["decode_tokens_per_second"] = float64(totalTokens) / decodeDuration
+		}
+		if totalDuration > 0 {
+			usage["total_tokens_per_second"] = float64(s.inputTokens+totalTokens) / totalDuration
+		}
+		usage["prefill_duration_seconds"] = prefillDuration
+		usage["decode_duration_seconds"] = decodeDuration
+		usage["total_duration_seconds"] = totalDuration
+	}
+
 	sendEvent(w, map[string]interface{}{
 		"type": "message_delta",
 		"delta": map[string]interface{}{"stop_reason": stopReason, "stop_sequence": nil},
-		"usage": map[string]interface{}{"output_tokens": totalTokens},
+		"usage": usage,
 	})
 	sendEvent(w, map[string]interface{}{"type": "message_stop"})
 }
@@ -659,6 +753,14 @@ func processVLLMLine(line string, s *streamState, w sseWriter) (int, string, boo
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(dataStr), &payload); err != nil {
 		return 0, "", false
+	}
+
+	// Parse usage from final chunk (when stream_options.include_usage is set)
+	if usageRaw, ok := payload["usage"].(map[string]interface{}); ok {
+		if pt, ok := usageRaw["prompt_tokens"].(float64); ok {
+			s.inputTokens = int(pt)
+		}
+		// total_tokens and completion_tokens also available if needed
 	}
 
 	choices, ok := payload["choices"].([]interface{})
@@ -733,6 +835,10 @@ func processVLLMLine(line string, s *streamState, w sseWriter) (int, string, boo
 					"delta": map[string]interface{}{"type": "input_json_delta", "partial_json": tcArgs},
 				})
 				tokensAdded++
+				if !s.gotFirstToken {
+					s.gotFirstToken = true
+					s.firstTokenAt = time.Now()
+				}
 			}
 		}
 		return tokensAdded, "", false
@@ -777,6 +883,10 @@ func processVLLMLine(line string, s *streamState, w sseWriter) (int, string, boo
 		})
 		s.thinkingTokens++
 		tokensAdded++
+		if !s.gotFirstToken {
+			s.gotFirstToken = true
+			s.firstTokenAt = time.Now()
+		}
 	}
 
 	if content != "" {
@@ -795,6 +905,10 @@ func processVLLMLine(line string, s *streamState, w sseWriter) (int, string, boo
 		})
 		s.textTokens++
 		tokensAdded++
+		if !s.gotFirstToken {
+			s.gotFirstToken = true
+			s.firstTokenAt = time.Now()
+		}
 	}
 
 	return tokensAdded, "", false
@@ -802,19 +916,17 @@ func processVLLMLine(line string, s *streamState, w sseWriter) (int, string, boo
 
 // ─── Handle streaming ─────────────────────────────────────────────────────
 
-func handleStreaming(w http.ResponseWriter, r *http.Request, openaiJSON []byte) {
+func handleStreaming(w http.ResponseWriter, ctx context.Context, openaiJSON []byte) (int, int) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		log.Println("[PROXY] hijacker not available, using fallback")
-		handleStreamingFallback(w, openaiJSON)
-		return
+		return handleStreamingFallback(w, ctx, openaiJSON)
 	}
 
 	conn, bufrw, err := hijacker.Hijack()
 	if err != nil {
 		log.Printf("[PROXY] hijack error: %v, using fallback", err)
-		handleStreamingFallback(w, openaiJSON)
-		return
+		return handleStreamingFallback(w, ctx, openaiJSON)
 	}
 	defer conn.Close()
 
@@ -831,6 +943,9 @@ func handleStreaming(w http.ResponseWriter, r *http.Request, openaiJSON []byte) 
 			"Connection: close\r\n" +
 			"\r\n",
 	))
+
+	// Mark start time for prefill timing
+	startTime := time.Now()
 
 	// Write message_start IMMEDIATELY before connecting to vLLM
 	eventData, _ := json.Marshal(map[string]interface{}{
@@ -849,26 +964,32 @@ func handleStreaming(w http.ResponseWriter, r *http.Request, openaiJSON []byte) 
 		bufrw.Reader.Discard(bufrw.Reader.Buffered())
 	}
 
-	streamVLLM(conn, openaiJSON)
+	outputTokens := streamVLLM(ctx, conn, openaiJSON, startTime)
 
 	// Wait briefly to ensure message_stop is fully received before closing
 	time.Sleep(200 * time.Millisecond)
+	return outputTokens, 0 // input tokens sent in message_delta, not available here
 }
 
-func streamVLLM(w sseWriter, openaiJSON []byte) {
+func streamVLLM(ctx context.Context, w sseWriter, openaiJSON []byte, startTime time.Time) int {
+	_, span := otelTracer.Start(ctx, "proxy.stream")
+	defer span.End()
+
 	log.Println("[STREAM] Starting vLLM request")
-	resp, err := requestVLLM(openaiJSON)
+	resp, err := requestVLLM(ctx, openaiJSON)
 	if err != nil {
 		log.Printf("[STREAM] vLLM error: %v", err)
-		s := newStreamState("msg_01", 0)
+		span.SetStatus(codes.Error, "vLLM error")
+		s := newStreamState("msg_01", 0, startTime)
 		finishStream(w, s, 0, "error")
-		return
+		return 0
 	}
 	log.Println("[STREAM] vLLM response received")
 	defer resp.Body.Close()
 
-	s := newStreamState("msg_01", 0)
+	s := newStreamState("msg_01", 0, startTime)
 	totalTokens := 0
+	totalChunks := 0
 
 	scanner := bufio.NewScanner(resp.Body)
 	buf := make([]byte, 0, 64*1024)
@@ -881,10 +1002,15 @@ func streamVLLM(w sseWriter, openaiJSON []byte) {
 			continue
 		}
 		tokensAdded, stopReason, done := processVLLMLine(line, s, w)
+		totalChunks++
 		if done {
 			totalTokens += tokensAdded
 			finishStream(w, s, totalTokens, stopReason)
-			return
+			span.SetAttributes(
+				attribute.Int("llm.output.tokens", totalTokens),
+				attribute.Int("proxy.stream.chunks", totalChunks),
+			)
+			return totalTokens
 		}
 		totalTokens += tokensAdded
 	}
@@ -892,17 +1018,22 @@ func streamVLLM(w sseWriter, openaiJSON []byte) {
 	if len(s.tcs) > 0 {
 		stopReason = "tool_use"
 	}
-	log.Printf("[STREAM] Done, tokens=%d, stopReason=%s", totalTokens, stopReason)
+	log.Printf("[STREAM] Done, tokens=%d, chunks=%d, stopReason=%s", totalTokens, totalChunks, stopReason)
 	finishStream(w, s, totalTokens, stopReason)
+	span.SetAttributes(
+		attribute.Int("llm.output.tokens", totalTokens),
+		attribute.Int("proxy.stream.chunks", totalChunks),
+	)
+	return totalTokens
 }
 
 // ─── Fallback streaming ───────────────────────────────────────────────────
 
-func handleStreamingFallback(w http.ResponseWriter, openaiJSON []byte) {
+func handleStreamingFallback(w http.ResponseWriter, ctx context.Context, openaiJSON []byte) (int, int) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-		return
+		return 0, 0
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -925,7 +1056,7 @@ func handleStreamingFallback(w http.ResponseWriter, openaiJSON []byte) {
 
 	// Wrap ResponseWriter + flusher into an sseWriter that auto-flushes
 	flushingWriter := &flushingRW{w: w, f: flusher}
-	streamVLLM(flushingWriter, openaiJSON)
+	return streamVLLM(ctx, flushingWriter, openaiJSON, time.Now()), 0
 }
 
 type flushingRW struct {
@@ -949,6 +1080,17 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleMessages(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+
+	// Extract incoming trace context for end-to-end traces
+	ctx := r.Context()
+	if r.Header.Get("traceparent") != "" {
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
+	}
+
+	_, span := otelTracer.Start(ctx, "proxy.request")
+	defer span.End()
+
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "*")
@@ -957,18 +1099,24 @@ func handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost {
+		span.SetStatus(codes.Error, "method not allowed")
+		otelRecordEnd(ctx, time.Since(startTime).Milliseconds(), "", false, "error", 0, 0, 0, 0)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		span.SetStatus(codes.Error, "read error")
+		otelRecordEnd(ctx, time.Since(startTime).Milliseconds(), "", false, "error", 0, 0, 0, 0)
 		http.Error(w, fmt.Sprintf("Read error: %v", err), http.StatusBadRequest)
 		return
 	}
 
 	var req AnthropicRequest
 	if err := json.Unmarshal(body, &req); err != nil {
+		span.SetStatus(codes.Error, "invalid request")
+		otelRecordEnd(ctx, time.Since(startTime).Milliseconds(), "", false, "error", 0, 0, 0, 0)
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
 		return
 	}
@@ -978,9 +1126,11 @@ func handleMessages(w http.ResponseWriter, r *http.Request) {
 	// Reject Claude Code's internal requests (e.g. claude-haiku for reflection/eval)
 	if strings.HasPrefix(req.Model, "claude-") {
 		log.Printf("[REQ] unsupported claude model %q, returning 404", req.Model)
+		span.SetStatus(codes.Error, "unsupported model")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, `{"type":"error","error":{"type":"not_found_error","message":"model %q not found"}}`, req.Model)
+		otelRecordEnd(ctx, time.Since(startTime).Milliseconds(), req.Model, req.Stream, "unsupported_model", 0, 0, 0, 0)
 		return
 	}
 
@@ -996,25 +1146,48 @@ func handleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	openaiReq := anthropicToOpenAI(&req)
+	openaiReq := anthropicToOpenAI(ctx, &req)
 	openaiJSON, err := json.Marshal(openaiReq)
 	if err != nil {
+		span.SetStatus(codes.Error, "marshal error")
+		otelRecordEnd(ctx, time.Since(startTime).Milliseconds(), vllmModel, req.Stream, "error", 0, 0, 0, 0)
 		http.Error(w, fmt.Sprintf("Marshal error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	log.Printf("[REQ] OpenAI payload: %d bytes, tools=%v", len(openaiJSON), len(openaiReq.Tools))
 
+	// Record request attributes on span
+	span.SetAttributes(
+		attribute.String("llm.request.model", req.Model),
+		attribute.String("llm.request.model_mapped", vllmModel),
+		attribute.Int("llm.request.messages", len(req.Messages)),
+		attribute.Int("llm.request.tools", len(req.Tools)),
+		attribute.Bool("llm.request.stream", req.Stream),
+	)
+
+	var outputTokens, inputTokens int
 	if req.Stream {
-		handleStreaming(w, r, openaiJSON)
+		outputTokens, inputTokens = handleStreaming(w, ctx, openaiJSON)
 	} else {
-		handleCollected(w, openaiJSON)
+		outputTokens, inputTokens = handleCollected(ctx, w, openaiJSON)
 	}
+
+	otelRecordEnd(ctx, time.Since(startTime).Milliseconds(), vllmModel, req.Stream, "success", outputTokens, inputTokens, 0, 0)
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := otelInit(ctx); err != nil {
+		log.Printf("[OTEL] Init failed (continuing without telemetry): %v", err)
+		otelTracer = otel.Tracer("golangproxy") // noop tracer when no provider is set
+	}
+	defer otelShutdown(context.Background())
+
 	listenHost := os.Getenv("PROXY_HOST")
 	listenPort := os.Getenv("PROXY_PORT")
 	if listenHost == "" {
@@ -1044,14 +1217,16 @@ func main() {
 
 	log.SetFlags(0)
 	log.Printf("Anthropic→OpenAI Go proxy on %s:%s", listenHost, listenPort)
-	log.Printf("  vLLM: %s  Model: %s  [Thinking ✓  Tools ✓  Streaming ✓]", vllmURL, vllmModel)
+	log.Printf("  vLLM: %s  Model: %s  [Thinking ✓  Tools ✓  Streaming ✓  OTel ✓]", vllmURL, vllmModel)
 
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		log.Println("[PROXY] Shutting down")
-		server.Shutdown(nil)
+		shutdownCtx, release := context.WithTimeout(context.Background(), 30*time.Second)
+		defer release()
+		server.Shutdown(shutdownCtx)
 	}()
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

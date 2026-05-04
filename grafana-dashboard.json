@@ -1,0 +1,1061 @@
+{
+  "id": null,
+  "uid": "golangproxy-otel",
+  "title": "golangproxy \u2014 OpenTelemetry",
+  "tags": [
+    "otel",
+    "golangproxy"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Overview",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [],
+      "datasource": null
+    },
+    {
+      "id": 2,
+      "title": "Total Requests",
+      "type": "stat",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 4,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT count() AS total FROM otel.otel_traces WHERE SpanName = 'proxy.request'",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^total$/",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Avg Duration",
+      "type": "stat",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 1,
+        "w": 4,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT round(avg(Duration) / 1000000, 2) AS avg_ms FROM otel.otel_traces WHERE SpanName = 'proxy.request'",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1000
+              },
+              {
+                "color": "red",
+                "value": 5000
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^avg_ms$/",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "title": "P95 Duration",
+      "type": "stat",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 4,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT round(quantile(0.95)(Duration) / 1000000, 2) AS p95_ms FROM otel.otel_traces WHERE SpanName = 'proxy.request'",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2000
+              },
+              {
+                "color": "red",
+                "value": 10000
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^p95_ms$/",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Error Rate",
+      "type": "stat",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 4,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT round(100.0 * sumIf(1, StatusCode = 'Error') / nullIf(count(), 0), 1) AS error_pct FROM otel.otel_traces WHERE SpanName = 'proxy.request'",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^error_pct$/",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 14,
+      "title": "Avg Tokens/sec",
+      "type": "stat",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 4,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT round(avg(1000.0 * toFloat64(SpanAttributes['llm.output.tokens']) / Duration), 1) AS tok_sec FROM otel.otel_traces WHERE SpanName IN ('proxy.stream', 'proxy.collect') AND SpanAttributes['llm.output.tokens'] != ''",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^tok_sec$/",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 15,
+      "title": "Cache Hit Rate",
+      "type": "stat",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 1,
+        "w": 4,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT round(100.0 * sum(toUInt32(SpanAttributes['llm.cache.read_tokens'])) / nullIf(sum(toUInt32(SpanAttributes['llm.cache.read_tokens']) + toUInt32(SpanAttributes['llm.cache.write_tokens'])), 0), 1) AS hit_pct FROM otel.otel_traces WHERE SpanName IN ('proxy.stream', 'proxy.collect') AND (SpanAttributes['llm.cache.read_tokens'] != '' OR SpanAttributes['llm.cache.write_tokens'] != '')",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "yellow",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 50
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^hit_pct$/",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Duration Breakdown",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [],
+      "datasource": null
+    },
+    {
+      "id": 7,
+      "title": "Avg Duration by Span",
+      "type": "bargauge",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT SpanName AS name, round(avg(Duration) / 1000000, 2) AS avg_ms FROM otel.otel_traces GROUP BY SpanName ORDER BY avg_ms DESC",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^avg_ms$/",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "color"
+      }
+    },
+    {
+      "id": 8,
+      "title": "Duration Distribution",
+      "type": "barchart",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT if(Duration < 1000000, '<1s', if(Duration < 5000000, '1-5s', if(Duration < 10000000, '5-10s', if(Duration < 30000000, '10-30s', if(Duration < 60000000, '30-60s', '>60s'))))) AS bucket, count() AS count FROM otel.otel_traces WHERE SpanName = 'proxy.request' GROUP BY bucket ORDER BY min(Duration)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "lineWidth": 1
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "bucketOffset": 0,
+        "combine": false,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "orientation": "vertical",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Time Series",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [],
+      "datasource": null
+    },
+    {
+      "id": 10,
+      "title": "Requests Over Time",
+      "type": "timeseries",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "time_series",
+          "query": "SELECT toStartOfMinute(Timestamp) AS time, count() AS requests FROM otel.otel_traces WHERE SpanName = 'proxy.request' GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic",
+            "fixedColor": "blue"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "hidden",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Avg Duration Over Time",
+      "type": "timeseries",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 21,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "time_series",
+          "query": "SELECT toStartOfMinute(Timestamp) AS time, round(avg(Duration) / 1000000, 2) AS avg_ms FROM otel.otel_traces WHERE SpanName = 'proxy.request' GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic",
+            "fixedColor": "yellow"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": [
+            {
+              "color": "yellow",
+              "value": 1000
+            },
+            {
+              "color": "red",
+              "value": 5000
+            }
+          ],
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "hidden",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Token Metrics",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [],
+      "datasource": null
+    },
+    {
+      "id": 16,
+      "title": "Tokens Over Time",
+      "type": "timeseries",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "time_series",
+          "query": "SELECT toStartOfMinute(Timestamp) AS time, sum(if(SpanAttributes['llm.input.tokens'] != '', toUInt32(SpanAttributes['llm.input.tokens']), 0)) AS input_tokens FROM otel.otel_traces WHERE SpanName IN ('proxy.stream', 'proxy.collect') GROUP BY time ORDER BY time",
+          "refId": "Input"
+        },
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "time_series",
+          "query": "SELECT toStartOfMinute(Timestamp) AS time, sum(if(SpanAttributes['llm.output.tokens'] != '', toUInt32(SpanAttributes['llm.output.tokens']), 0)) AS output_tokens FROM otel.otel_traces WHERE SpanName IN ('proxy.stream', 'proxy.collect') GROUP BY time ORDER BY time",
+          "refId": "Output"
+        },
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "time_series",
+          "query": "SELECT toStartOfMinute(Timestamp) AS time, sum(if(SpanAttributes['llm.cache.read_tokens'] != '', toUInt32(SpanAttributes['llm.cache.read_tokens']), 0)) AS cache_reads FROM otel.otel_traces WHERE SpanName IN ('proxy.stream', 'proxy.collect') GROUP BY time ORDER BY time",
+          "refId": "CacheRead"
+        },
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "time_series",
+          "query": "SELECT toStartOfMinute(Timestamp) AS time, sum(if(SpanAttributes['llm.cache.write_tokens'] != '', toUInt32(SpanAttributes['llm.cache.write_tokens']), 0)) AS cache_writes FROM otel.otel_traces WHERE SpanName IN ('proxy.stream', 'proxy.collect') GROUP BY time ORDER BY time",
+          "refId": "CacheWrite"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "auto",
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "input_tokens"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "output_tokens"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cache_reads"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "purple",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cache_writes"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "Trace Explorer",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [],
+      "datasource": null
+    },
+    {
+      "id": 17,
+      "title": "Recent Spans",
+      "type": "table",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 24,
+        "h": 14
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT TraceId, SpanName, ServiceName, round(Duration / 1000000, 2) AS DurationMs, StatusCode, SpanAttributes['llm.request.model'] AS Model, SpanAttributes['user.name'] AS User, if(SpanAttributes['llm.output.tokens'] != '', toUInt32(SpanAttributes['llm.output.tokens']), 0) AS OutputTokens, if(SpanAttributes['llm.input.tokens'] != '', toUInt32(SpanAttributes['llm.input.tokens']), 0) AS InputTokens, if(SpanAttributes['llm.cache.read_tokens'] != '', toUInt32(SpanAttributes['llm.cache.read_tokens']), 0) AS CacheRead, if(SpanAttributes['llm.cache.write_tokens'] != '', toUInt32(SpanAttributes['llm.cache.write_tokens']), 0) AS CacheWrite, if(SpanAttributes['llm.output.tokens'] != '', round(1000.0 * toFloat64(SpanAttributes['llm.output.tokens']) / Duration, 1), 0) AS TokensPerSec, toDateTime64(Timestamp, 3) AS StartedAt FROM otel.otel_traces ORDER BY Timestamp DESC LIMIT 200",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "StatusCode"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "mode": "thresholds"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "Error": {
+                        "color": "red",
+                        "text": "Error"
+                      },
+                      "Ok": {
+                        "color": "green",
+                        "text": "Ok"
+                      },
+                      "Unset": {
+                        "color": "blue",
+                        "text": "Unset"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DurationMs"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TokensPerSec"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "enablePagination": true,
+          "reducer": [
+            "sum"
+          ],
+          "showCount": false
+        },
+        "sortBy": [
+          {
+            "displayName": "StartedAt",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "title": "Active User",
+      "type": "stat",
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "dfl08clqvqarkd"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 4,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "dfl08clqvqarkd"
+          },
+          "format": "table",
+          "query": "SELECT argMax(user_name, Timestamp) AS user FROM (SELECT SpanAttributes['user.name'] AS user_name, Timestamp FROM otel.otel_traces WHERE SpanName = 'proxy.request' AND SpanAttributes['user.name'] != '')",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^user$/",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h"
+    ],
+    "time_options": [
+      "5m",
+      "15m",
+      "1h",
+      "6h",
+      "12h",
+      "24h",
+      "2d",
+      "7d",
+      "30d"
+    ]
+  },
+  "version": 0
+}

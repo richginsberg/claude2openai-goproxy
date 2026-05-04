@@ -1,0 +1,46 @@
+# OpenTelemetry Collector config for golangproxy → ClickHouse
+#
+# docker run -d --name otel-collector \
+#   -p 4317:4317 -p 4318:4318 \
+#   -v $(pwd)/otelcol-config.yml:/etc/otelcol/config.yml \
+#   otel/opentelemetry-collector-contrib:latest \
+#   --config /etc/otelcol/config.yml
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  debug:
+    verbosity: normal
+
+  clickhouse:
+    endpoint: "tcp://otel-ch-otel:9000"
+    username: default
+    password: otel
+    database: otel
+    ttl: "336h"
+    timeout: 5s
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    metrics_table_name: otel_metrics
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, debug]
