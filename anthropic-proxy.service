@@ -1,0 +1,16 @@
+[Unit]
+Description=Anthropic->OpenAI Go Proxy for vLLM
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=__GOLANGPROXY_BIN__
+Restart=on-failure
+RestartSec=3
+Environment=VLLM_URL=__VLLM_URL__
+Environment=VLLM_MODEL=__VLLM_MODEL__
+Environment=PROXY_PORT=__PROXY_PORT__
+Environment=PROXY_HOST=__PROXY_HOST__
+
+[Install]
+WantedBy=default.target

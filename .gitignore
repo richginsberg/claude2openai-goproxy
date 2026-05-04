@@ -1,0 +1,15 @@
+# Build artifact
+golangproxy
+
+# Local systemd service (contains machine-specific paths)
+anthropic-proxy.service.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test cache
+*.test
+*.out
